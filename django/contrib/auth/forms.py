@@ -7,6 +7,7 @@ from django.contrib.auth import (
 from django.contrib.auth.hashers import (
     UNUSABLE_PASSWORD_PREFIX, identify_hasher,
 )
+from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.sites.shortcuts import get_current_site
 from django.core.mail import EmailMultiAlternatives
@@ -82,9 +83,9 @@ class UserCreationForm(forms.ModelForm):
     )
 
     class Meta:
-        model = UserModel
-        fields = (UserModel.USERNAME_FIELD,)
-        field_classes = {UserModel.USERNAME_FIELD: UsernameField}
+        model = User
+        fields = ("username",)
+        field_classes = {'username': UsernameField}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -131,16 +132,18 @@ class UserChangeForm(forms.ModelForm):
     )
 
     class Meta:
-        model = UserModel
+        model = User
         fields = '__all__'
-        field_classes = {UserModel.USERNAME_FIELD: UsernameField}
+        field_classes = {'username': UsernameField}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['password'].help_text = self.fields['password'].help_text.format('../password/')
-        f = self.fields.get('user_permissions')
-        if f is not None:
-            f.queryset = f.queryset.select_related('content_type')
+        password = self.fields.get('password')
+        if password:
+            password.help_text = password.help_text.format('../password/')
+        user_permissions = self.fields.get('user_permissions')
+        if user_permissions:
+            user_permissions.queryset = user_permissions.queryset.select_related('content_type')
 
     def clean_password(self):
         # Regardless of what the user provides, return the initial value.

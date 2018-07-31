@@ -30,8 +30,8 @@ from django.utils.translation import (
     LANGUAGE_SESSION_KEY, activate, check_for_language, deactivate,
     get_language, get_language_bidi, get_language_from_request,
     get_language_info, gettext, gettext_lazy, ngettext, ngettext_lazy,
-    npgettext, npgettext_lazy, pgettext, to_locale, trans_null, trans_real,
-    ugettext, ugettext_lazy, ungettext, ungettext_lazy,
+    npgettext, npgettext_lazy, pgettext, to_language, to_locale, trans_null,
+    trans_real, ugettext, ugettext_lazy, ungettext, ungettext_lazy,
 )
 
 from .forms import CompanyForm, I18nForm, SelectDateForm
@@ -85,6 +85,12 @@ class TranslationTests(SimpleTestCase):
         self.assertEqual(ngettext("%d year", "%d years", 2) % 2, "2 années")
         self.assertEqual(ngettext("%(size)d byte", "%(size)d bytes", 0) % {'size': 0}, "0 octet")
         self.assertEqual(ngettext("%(size)d byte", "%(size)d bytes", 2) % {'size': 2}, "2 octets")
+
+    def test_plural_null(self):
+        g = trans_null.ngettext
+        self.assertEqual(g('%d year', '%d years', 0) % 0, '0 years')
+        self.assertEqual(g('%d year', '%d years', 1) % 1, '1 year')
+        self.assertEqual(g('%d year', '%d years', 2) % 2, '2 years')
 
     def test_override(self):
         activate('de')
@@ -282,13 +288,18 @@ class TranslationTests(SimpleTestCase):
                 self.assertEqual(to_locale(lang), locale)
 
     def test_to_language(self):
-        self.assertEqual(trans_real.to_language('en_US'), 'en-us')
-        self.assertEqual(trans_real.to_language('sr_Lat'), 'sr-lat')
+        self.assertEqual(to_language('en_US'), 'en-us')
+        self.assertEqual(to_language('sr_Lat'), 'sr-lat')
 
     def test_language_bidi(self):
         self.assertIs(get_language_bidi(), False)
         with translation.override(None):
             self.assertIs(get_language_bidi(), False)
+
+    def test_language_bidi_null(self):
+        self.assertIs(trans_null.get_language_bidi(), False)
+        with override_settings(LANGUAGE_CODE='he'):
+            self.assertIs(get_language_bidi(), True)
 
 
 class TranslationThreadSafetyTests(SimpleTestCase):
@@ -938,8 +949,15 @@ class FormattingTests(SimpleTestCase):
                 )
 
     def test_localized_input_func(self):
+        tests = (
+            (True, 'True'),
+            (datetime.date(1, 1, 1), '0001-01-01'),
+            (datetime.datetime(1, 1, 1), '0001-01-01 00:00:00'),
+        )
         with self.settings(USE_THOUSAND_SEPARATOR=True):
-            self.assertEqual(localize_input(True), 'True')
+            for value, expected in tests:
+                with self.subTest(value=value):
+                    self.assertEqual(localize_input(value), expected)
 
     def test_sanitize_separators(self):
         """
@@ -1028,33 +1046,35 @@ class FormattingTests(SimpleTestCase):
         """
         Test the {% localize %} templatetag and the localize/unlocalize filters.
         """
-        context = Context({'float': 3.14, 'date': datetime.date(2016, 12, 31)})
+        context = Context({'int': 1455, 'float': 3.14, 'date': datetime.date(2016, 12, 31)})
         template1 = Template(
-            '{% load l10n %}{% localize %}{{ float }}/{{ date }}{% endlocalize %}; '
-            '{% localize on %}{{ float }}/{{ date }}{% endlocalize %}'
+            '{% load l10n %}{% localize %}{{ int }}/{{ float }}/{{ date }}{% endlocalize %}; '
+            '{% localize on %}{{ int }}/{{ float }}/{{ date }}{% endlocalize %}'
         )
         template2 = Template(
-            '{% load l10n %}{{ float }}/{{ date }}; '
-            '{% localize off %}{{ float }}/{{ date }};{% endlocalize %} '
-            '{{ float }}/{{ date }}'
+            '{% load l10n %}{{ int }}/{{ float }}/{{ date }}; '
+            '{% localize off %}{{ int }}/{{ float }}/{{ date }};{% endlocalize %} '
+            '{{ int }}/{{ float }}/{{ date }}'
         )
         template3 = Template(
-            '{% load l10n %}{{ float }}/{{ date }}; {{ float|unlocalize }}/{{ date|unlocalize }}'
+            '{% load l10n %}{{ int }}/{{ float }}/{{ date }}; '
+            '{{ int|unlocalize }}/{{ float|unlocalize }}/{{ date|unlocalize }}'
         )
         template4 = Template(
-            '{% load l10n %}{{ float }}/{{ date }}; {{ float|localize }}/{{ date|localize }}'
+            '{% load l10n %}{{ int }}/{{ float }}/{{ date }}; '
+            '{{ int|localize }}/{{ float|localize }}/{{ date|localize }}'
         )
-        expected_localized = '3,14/31. Dezember 2016'
-        expected_unlocalized = '3.14/Dez. 31, 2016'
+        expected_localized = '1.455/3,14/31. Dezember 2016'
+        expected_unlocalized = '1455/3.14/Dez. 31, 2016'
         output1 = '; '.join([expected_localized, expected_localized])
         output2 = '; '.join([expected_localized, expected_unlocalized, expected_localized])
         output3 = '; '.join([expected_localized, expected_unlocalized])
         output4 = '; '.join([expected_unlocalized, expected_localized])
         with translation.override('de', deactivate=True):
-            with self.settings(USE_L10N=False):
+            with self.settings(USE_L10N=False, USE_THOUSAND_SEPARATOR=True):
                 self.assertEqual(template1.render(context), output1)
                 self.assertEqual(template4.render(context), output4)
-            with self.settings(USE_L10N=True):
+            with self.settings(USE_L10N=True, USE_THOUSAND_SEPARATOR=True):
                 self.assertEqual(template1.render(context), output1)
                 self.assertEqual(template2.render(context), output2)
                 self.assertEqual(template3.render(context), output3)
@@ -1642,6 +1662,9 @@ class CountrySpecificLanguageTests(SimpleTestCase):
         self.assertFalse(check_for_language('tr-TR.UTF8'))
         self.assertFalse(check_for_language('de-DE.utf-8'))
 
+    def test_check_for_language_null(self):
+        self.assertIs(trans_null.check_for_language('en'), True)
+
     def test_get_language_from_request(self):
         # issue 19919
         r = self.rf.get('/')
@@ -1654,6 +1677,13 @@ class CountrySpecificLanguageTests(SimpleTestCase):
         r.META = {'HTTP_ACCEPT_LANGUAGE': 'bg-bg,en-US;q=0.8,en;q=0.6,ru;q=0.4'}
         lang = get_language_from_request(r)
         self.assertEqual('bg', lang)
+
+    def test_get_language_from_request_null(self):
+        lang = trans_null.get_language_from_request(None)
+        self.assertEqual(lang, 'en')
+        with override_settings(LANGUAGE_CODE='de'):
+            lang = trans_null.get_language_from_request(None)
+            self.assertEqual(lang, 'de')
 
     def test_specific_language_codes(self):
         # issue 11915

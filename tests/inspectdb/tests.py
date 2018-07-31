@@ -7,7 +7,7 @@ from django.db import connection
 from django.db.backends.base.introspection import TableInfo
 from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
 
-from .models import ColumnTypes
+from .models import PeopleMoreData
 
 
 def inspectdb_tables_only(table_name):
@@ -23,6 +23,7 @@ def special_table_only(table_name):
 
 
 class InspectDBTestCase(TestCase):
+    unique_re = re.compile(r'.*unique_together = \((.+),\).*')
 
     def test_stealth_table_name_filter_option(self):
         out = StringIO()
@@ -96,18 +97,9 @@ class InspectDBTestCase(TestCase):
         else:
             assertFieldType('big_int_field', "models.IntegerField()")
 
-        bool_field = ColumnTypes._meta.get_field('bool_field')
-        bool_field_type = connection.features.introspected_boolean_field_type(bool_field)
+        bool_field_type = connection.features.introspected_boolean_field_type
         assertFieldType('bool_field', "models.{}()".format(bool_field_type))
-        null_bool_field = ColumnTypes._meta.get_field('null_bool_field')
-        null_bool_field_type = connection.features.introspected_boolean_field_type(null_bool_field)
-        if 'BooleanField' in null_bool_field_type:
-            assertFieldType('null_bool_field', "models.{}()".format(null_bool_field_type))
-        else:
-            if connection.features.can_introspect_null:
-                assertFieldType('null_bool_field', "models.{}(blank=True, null=True)".format(null_bool_field_type))
-            else:
-                assertFieldType('null_bool_field', "models.{}()".format(null_bool_field_type))
+        assertFieldType('null_bool_field', 'models.{}(blank=True, null=True)'.format(bool_field_type))
 
         if connection.features.can_introspect_decimal_field:
             assertFieldType('decimal_field', "models.DecimalField(max_digits=6, decimal_places=1)")
@@ -222,8 +214,8 @@ class InspectDBTestCase(TestCase):
         out = StringIO()
         call_command('inspectdb', 'inspectdb_uniquetogether', stdout=out)
         output = out.getvalue()
-        unique_re = re.compile(r'.*unique_together = \((.+),\).*')
-        unique_together_match = re.findall(unique_re, output)
+        self.assertIn("    unique_together = (('", output)
+        unique_together_match = re.findall(self.unique_re, output)
         # There should be one unique_together tuple.
         self.assertEqual(len(unique_together_match), 1)
         fields = unique_together_match[0]
@@ -234,6 +226,28 @@ class InspectDBTestCase(TestCase):
         # Fields whose names normalize to the same Python field name and hence
         # are given an integer suffix.
         self.assertIn("('non_unique_column', 'non_unique_column_0')", fields)
+
+    @skipUnless(connection.vendor == 'postgresql', 'PostgreSQL specific SQL')
+    def test_unsupported_unique_together(self):
+        """Unsupported index types (COALESCE here) are skipped."""
+        with connection.cursor() as c:
+            c.execute(
+                'CREATE UNIQUE INDEX Findex ON %s '
+                '(id, people_unique_id, COALESCE(message_id, -1))' % PeopleMoreData._meta.db_table
+            )
+        try:
+            out = StringIO()
+            call_command(
+                'inspectdb',
+                table_name_filter=lambda tn: tn.startswith(PeopleMoreData._meta.db_table),
+                stdout=out,
+            )
+            output = out.getvalue()
+            self.assertIn('# A unique constraint could not be introspected.', output)
+            self.assertEqual(re.findall(self.unique_re, output), ["('id', 'people_unique')"])
+        finally:
+            with connection.cursor() as c:
+                c.execute('DROP INDEX Findex')
 
     @skipUnless(connection.vendor == 'sqlite',
                 "Only patched sqlite's DatabaseIntrospection.data_types_reverse for this test")

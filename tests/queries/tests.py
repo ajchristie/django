@@ -93,8 +93,8 @@ class Queries1Tests(TestCase):
         self.assertEqual(qs4.query.subq_aliases, {'T', 'U', 'V'})
         # It is possible to reuse U for the second subquery, no need to use W.
         self.assertNotIn('w0', str(qs4.query).lower())
-        # So, 'U0."id"' is referenced twice.
-        self.assertTrue(str(qs4.query).lower().count('u0'), 2)
+        # So, 'U0."id"' is referenced in SELECT and WHERE twice.
+        self.assertEqual(str(qs4.query).lower().count('u0.'), 4)
 
     def test_ticket1050(self):
         self.assertQuerysetEqual(
@@ -511,7 +511,7 @@ class Queries1Tests(TestCase):
 
         # This is also a good select_related() test because there are multiple
         # Note entries in the SQL. The two Note items should be different.
-        self.assertTrue(repr(qs[0].note), '<Note: n2>')
+        self.assertEqual(repr(qs[0].note), '<Note: n2>')
         self.assertEqual(repr(qs[0].creator.extra.note), '<Note: n1>')
 
     def test_ticket3037(self):
@@ -1636,7 +1636,8 @@ class Queries5Tests(TestCase):
             ['<Ranking: 1: a3>', '<Ranking: 2: a2>', '<Ranking: 3: a1>']
         )
 
-        qs = Ranking.objects.extra(select={'good': 'case when rank > 2 then 1 else 0 end'})
+        sql = 'case when %s > 2 then 1 else 0 end' % connection.ops.quote_name('rank')
+        qs = Ranking.objects.extra(select={'good': sql})
         self.assertEqual(
             [o.good for o in qs.extra(order_by=('-good',))],
             [True, False, False]
@@ -1657,7 +1658,8 @@ class Queries5Tests(TestCase):
     def test_ticket7256(self):
         # An empty values() call includes all aliases, including those from an
         # extra()
-        qs = Ranking.objects.extra(select={'good': 'case when rank > 2 then 1 else 0 end'})
+        sql = 'case when %s > 2 then 1 else 0 end' % connection.ops.quote_name('rank')
+        qs = Ranking.objects.extra(select={'good': sql})
         dicts = qs.values().order_by('id')
         for d in dicts:
             del d['id']
@@ -2022,6 +2024,9 @@ class QuerysetOrderedTests(unittest.TestCase):
     def test_explicit_ordering(self):
         self.assertIs(Annotation.objects.all().order_by('id').ordered, True)
 
+    def test_empty_queryset(self):
+        self.assertIs(Annotation.objects.none().ordered, True)
+
     def test_order_by_extra(self):
         self.assertIs(Annotation.objects.all().extra(order_by=['id']).ordered, True)
 
@@ -2235,7 +2240,8 @@ class ValuesQuerysetTests(TestCase):
         # testing for ticket 14930 issues
         qs = Number.objects.extra(
             select={'value_plus_one': 'num+1', 'value_minus_one': 'num-1'},
-            order_by=['value_minus_one'])
+            order_by=['value_minus_one'],
+        )
         qs = qs.values('num')
 
     def test_extra_select_params_values_order_in_extra(self):
@@ -2243,7 +2249,8 @@ class ValuesQuerysetTests(TestCase):
         qs = Number.objects.extra(
             select={'value_plus_x': 'num+%s'},
             select_params=[1],
-            order_by=['value_plus_x'])
+            order_by=['value_plus_x'],
+        )
         qs = qs.filter(num=72)
         qs = qs.values('num')
         self.assertSequenceEqual(qs, [{'num': 72}])

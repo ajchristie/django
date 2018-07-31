@@ -1,3 +1,4 @@
+import warnings
 from itertools import chain
 
 from django.apps import apps
@@ -9,10 +10,13 @@ from django.core import checks
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
+from django.db.models.expressions import Combinable, F, OrderBy
 from django.forms.models import (
     BaseModelForm, BaseModelFormSet, _get_foreign_key,
 )
 from django.template.engine import Engine
+from django.utils.deprecation import RemovedInDjango30Warning
+from django.utils.inspect import get_func_args
 
 
 def check_admin_app(app_configs, **kwargs):
@@ -206,12 +210,13 @@ class BaseModelAdminChecks:
         elif not isinstance(obj.fieldsets, (list, tuple)):
             return must_be('a list or tuple', option='fieldsets', obj=obj, id='admin.E007')
         else:
+            seen_fields = []
             return list(chain.from_iterable(
-                self._check_fieldsets_item(obj, obj.model, fieldset, 'fieldsets[%d]' % index)
+                self._check_fieldsets_item(obj, obj.model, fieldset, 'fieldsets[%d]' % index, seen_fields)
                 for index, fieldset in enumerate(obj.fieldsets)
             ))
 
-    def _check_fieldsets_item(self, obj, model, fieldset, label):
+    def _check_fieldsets_item(self, obj, model, fieldset, label, seen_fields):
         """ Check an item of `fieldsets`, i.e. check that this is a pair of a
         set name and a dictionary containing "fields" key. """
 
@@ -232,8 +237,8 @@ class BaseModelAdminChecks:
         elif not isinstance(fieldset[1]['fields'], (list, tuple)):
             return must_be('a list or tuple', option="%s[1]['fields']" % label, obj=obj, id='admin.E008')
 
-        fields = flatten(fieldset[1]['fields'])
-        if len(fields) != len(set(fields)):
+        seen_fields.extend(flatten(fieldset[1]['fields']))
+        if len(seen_fields) != len(set(seen_fields)):
             return [
                 checks.Error(
                     "There are duplicate field(s) in '%s[1]'." % label,
@@ -485,7 +490,13 @@ class BaseModelAdminChecks:
 
     def _check_ordering_item(self, obj, model, field_name, label):
         """ Check that `ordering` refers to existing fields. """
-
+        if isinstance(field_name, (Combinable, OrderBy)):
+            if not isinstance(field_name, OrderBy):
+                field_name = field_name.asc()
+            if isinstance(field_name.expression, F):
+                field_name = field_name.expression.name
+            else:
+                return []
         if field_name == '?' and len(obj.ordering) != 1:
             return [
                 checks.Error(
@@ -568,6 +579,7 @@ class ModelAdminChecks(BaseModelAdminChecks):
             *self._check_list_editable(admin_obj),
             *self._check_search_fields(admin_obj),
             *self._check_date_hierarchy(admin_obj),
+            *self._check_action_permission_methods(admin_obj),
         ]
 
     def _check_save_as(self, obj):
@@ -880,10 +892,37 @@ class ModelAdminChecks(BaseModelAdminChecks):
                 else:
                     return []
 
+    def _check_action_permission_methods(self, obj):
+        """
+        Actions with an allowed_permission attribute require the ModelAdmin to
+        implement a has_<perm>_permission() method for each permission.
+        """
+        actions = obj._get_base_actions()
+        errors = []
+        for func, name, _ in actions:
+            if not hasattr(func, 'allowed_permissions'):
+                continue
+            for permission in func.allowed_permissions:
+                method_name = 'has_%s_permission' % permission
+                if not hasattr(obj, method_name):
+                    errors.append(
+                        checks.Error(
+                            '%s must define a %s() method for the %s action.' % (
+                                obj.__class__.__name__,
+                                method_name,
+                                func.__name__,
+                            ),
+                            obj=obj.__class__,
+                            id='admin.E129',
+                        )
+                    )
+        return errors
+
 
 class InlineModelAdminChecks(BaseModelAdminChecks):
 
     def check(self, inline_obj, **kwargs):
+        self._check_has_add_permission(inline_obj)
         parent_model = inline_obj.parent_model
         return [
             *super().check(inline_obj),
@@ -967,6 +1006,20 @@ class InlineModelAdminChecks(BaseModelAdminChecks):
             return must_inherit_from(parent='BaseModelFormSet', option='formset', obj=obj, id='admin.E206')
         else:
             return []
+
+    def _check_has_add_permission(self, obj):
+        cls = obj.__class__
+        try:
+            func = cls.has_add_permission
+        except AttributeError:
+            pass
+        else:
+            args = get_func_args(func)
+            if 'obj' not in args:
+                warnings.warn(
+                    "Update %s.has_add_permission() to accept a positional "
+                    "`obj` argument." % cls.__name__, RemovedInDjango30Warning
+                )
 
 
 def must_be(type, option, obj, id):

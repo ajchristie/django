@@ -171,8 +171,8 @@ Put the following in the ``tests.py`` file in the ``polls`` application:
 
     import datetime
 
-    from django.utils import timezone
     from django.test import TestCase
+    from django.utils import timezone
 
     from .models import Question
 
@@ -188,10 +188,9 @@ Put the following in the ``tests.py`` file in the ``polls`` application:
             future_question = Question(pub_date=time)
             self.assertIs(future_question.was_published_recently(), False)
 
-What we have done here is created a :class:`django.test.TestCase` subclass
-with a method that creates a ``Question`` instance with a ``pub_date`` in the
-future. We then check the output of ``was_published_recently()`` - which
-*ought* to be False.
+Here we have created a :class:`django.test.TestCase` subclass with a method that
+creates a ``Question`` instance with a ``pub_date`` in the future. We then check
+the output of ``was_published_recently()`` - which *ought* to be False.
 
 Running tests
 -------------
@@ -442,12 +441,12 @@ is, earlier than or equal to - ``timezone.now``.
 Testing our new view
 --------------------
 
-Now you can satisfy yourself that this behaves as expected by firing up the
-runserver, loading the site in your browser, creating ``Questions`` with dates
-in the past and future, and checking that only those that have been published
-are listed.  You don't want to have to do that *every single time you make any
-change that might affect this* - so let's also create a test, based on our
-:djadmin:`shell` session above.
+Now you can satisfy yourself that this behaves as expected by firing up
+``runserver``, loading the site in your browser, creating ``Questions`` with
+dates in the past and future, and checking that only those that have been
+published are listed. You don't want to have to do that *every single time you
+make any change that might affect this* - so let's also create a test, based on
+our :djadmin:`shell` session above.
 
 Add the following to ``polls/tests.py``:
 

@@ -1,10 +1,10 @@
 import unittest
 
 from django.conf import settings
-from django.core.checks import Error
+from django.core.checks import Error, Warning
 from django.core.checks.model_checks import _check_lazy_references
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connections, models
+from django.db import connection, connections, models
 from django.db.models.signals import post_init
 from django.test import SimpleTestCase
 from django.test.utils import isolate_apps, override_settings
@@ -717,6 +717,19 @@ class OtherModelTests(SimpleTestCase):
             )
         ])
 
+    def test_single_primary_key(self):
+        class Model(models.Model):
+            foo = models.IntegerField(primary_key=True)
+            bar = models.IntegerField(primary_key=True)
+
+        self.assertEqual(Model.check(), [
+            Error(
+                "The model cannot have more than one field with 'primary_key=True'.",
+                obj=Model,
+                id='models.E026',
+            )
+        ])
+
     @override_settings(TEST_SWAPPED_MODEL_BAD_VALUE='not-a-model')
     def test_swappable_missing_app_name(self):
         class Model(models.Model):
@@ -959,3 +972,26 @@ class OtherModelTests(SimpleTestCase):
                 id='signals.E001',
             ),
         ])
+
+
+@isolate_apps('invalid_models_tests')
+class ConstraintsTests(SimpleTestCase):
+    def test_check_constraints(self):
+        class Model(models.Model):
+            age = models.IntegerField()
+
+            class Meta:
+                constraints = [models.CheckConstraint(models.Q(age__gte=18), 'is_adult')]
+
+        errors = Model.check()
+        warn = Warning(
+            '%s does not support check constraints.' % connection.display_name,
+            hint=(
+                "A constraint won't be created. Silence this warning if you "
+                "don't care about it."
+            ),
+            obj=Model,
+            id='models.W027',
+        )
+        expected = [] if connection.features.supports_table_check_constraints else [warn, warn]
+        self.assertCountEqual(errors, expected)

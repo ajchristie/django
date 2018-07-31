@@ -448,7 +448,7 @@ def safeseq(value):
     individually, as safe, after converting them to strings. Return a list
     with the results.
     """
-    return [mark_safe(str(obj)) for obj in value]
+    return [mark_safe(obj) for obj in value]
 
 
 @register.filter(is_safe=True)
@@ -573,7 +573,7 @@ def slice_filter(value, arg):
     """
     try:
         bits = []
-        for x in arg.split(':'):
+        for x in str(arg).split(':'):
             if not x:
                 bits.append(None)
             else:

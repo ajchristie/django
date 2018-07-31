@@ -185,18 +185,16 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         use_returning_into = self.settings_dict["OPTIONS"].get('use_returning_into', True)
         self.features.can_return_id_from_insert = use_returning_into
 
-    def _connect_string(self):
+    def _dsn(self):
         settings_dict = self.settings_dict
         if not settings_dict['HOST'].strip():
             settings_dict['HOST'] = 'localhost'
         if settings_dict['PORT']:
-            dsn = Database.makedsn(settings_dict['HOST'],
-                                   int(settings_dict['PORT']),
-                                   settings_dict['NAME'])
-        else:
-            dsn = settings_dict['NAME']
-        return "%s/%s@%s" % (settings_dict['USER'],
-                             settings_dict['PASSWORD'], dsn)
+            return Database.makedsn(settings_dict['HOST'], int(settings_dict['PORT']), settings_dict['NAME'])
+        return settings_dict['NAME']
+
+    def _connect_string(self):
+        return '%s/\\"%s\\"@%s' % (self.settings_dict['USER'], self.settings_dict['PASSWORD'], self._dsn())
 
     def get_connection_params(self):
         conn_params = self.settings_dict['OPTIONS'].copy()
@@ -205,7 +203,12 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return conn_params
 
     def get_new_connection(self, conn_params):
-        return Database.connect(self._connect_string(), **conn_params)
+        return Database.connect(
+            user=self.settings_dict['USER'],
+            password=self.settings_dict['PASSWORD'],
+            dsn=self._dsn(),
+            **conn_params,
+        )
 
     def init_connection_state(self):
         cursor = self.create_cursor()
@@ -456,7 +459,8 @@ class FormatStylePlaceholderCursor:
                 for k, value in params.items():
                     if value.input_size:
                         sizes[k] = value.input_size
-            self.setinputsizes(**sizes)
+            if sizes:
+                self.setinputsizes(**sizes)
         else:
             # It's not a list of dicts; it's a list of sequences
             sizes = [None] * len(params_list[0])
@@ -464,7 +468,8 @@ class FormatStylePlaceholderCursor:
                 for i, value in enumerate(params):
                     if value.input_size:
                         sizes[i] = value.input_size
-            self.setinputsizes(*sizes)
+            if sizes:
+                self.setinputsizes(*sizes)
 
     def _param_generator(self, params):
         # Try dict handling; if that fails, treat as sequence
@@ -521,14 +526,6 @@ class FormatStylePlaceholderCursor:
         formatted = [firstparams] + [self._format_params(p) for p in params_iter]
         self._guess_input_sizes(formatted)
         return self.cursor.executemany(query, [self._param_generator(p) for p in formatted])
-
-    def fetchmany(self, size=None):
-        if size is None:
-            size = self.arraysize
-        return tuple(self.cursor.fetchmany(size))
-
-    def fetchall(self):
-        return tuple(self.cursor.fetchall())
 
     def close(self):
         try:

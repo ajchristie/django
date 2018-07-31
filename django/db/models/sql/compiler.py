@@ -6,7 +6,7 @@ from itertools import chain
 
 from django.core.exceptions import EmptyResultSet, FieldError
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import OrderBy, Random, RawSQL, Ref
+from django.db.models.expressions import OrderBy, Random, RawSQL, Ref, Subquery
 from django.db.models.query_utils import QueryWrapper, select_related_descend
 from django.db.models.sql.constants import (
     CURSOR, GET_ITERATOR_CHUNK_SIZE, MULTI, NO_RESULTS, ORDER_DIR, SINGLE,
@@ -127,6 +127,11 @@ class SQLCompiler:
 
         for expr in expressions:
             sql, params = self.compile(expr)
+            if isinstance(expr, Subquery) and not sql.startswith('('):
+                # Subquery expression from HAVING clause may not contain
+                # wrapping () because they could be removed when a subquery is
+                # the "rhs" in an expression (see Subquery._prepare()).
+                sql = '(%s)' % sql
             if (sql, tuple(params)) not in seen:
                 result.append((sql, params))
                 seen.add((sql, tuple(params)))
@@ -157,7 +162,9 @@ class SQLCompiler:
                 }
                 expressions = [pk] + [
                     expr for expr in expressions
-                    if expr in having or getattr(expr, 'alias', None) not in pk_aliases
+                    if expr in having or (
+                        getattr(expr, 'alias', None) is not None and expr.alias not in pk_aliases
+                    )
                 ]
         elif self.connection.features.allows_group_by_selected_pks:
             # Filter out all expressions associated with a table's primary key
@@ -409,7 +416,7 @@ class SQLCompiler:
                 # must have the same columns list. Set the selects defined on
                 # the query on all combined queries, if not already set.
                 if not compiler.query.values_select and self.query.values_select:
-                    compiler.query.set_values(self.query.values_select)
+                    compiler.query.set_values((*self.query.values_select, *self.query.annotation_select))
                 parts += (compiler.as_sql(),)
             except EmptyResultSet:
                 # Omit the empty queryset with UNION and with DIFFERENCE if the
@@ -529,6 +536,12 @@ class SQLCompiler:
                 if having:
                     result.append('HAVING %s' % having)
                     params.extend(h_params)
+
+            if self.query.explain_query:
+                result.insert(0, self.connection.ops.explain_query_prefix(
+                    self.query.explain_format,
+                    **self.query.explain_options
+                ))
 
             if order_by:
                 ordering = []
@@ -841,7 +854,6 @@ class SQLCompiler:
                     select, model._meta, alias, cur_depth + 1,
                     next, restricted)
                 get_related_klass_infos(klass_info, next_klass_infos)
-            fields_not_found = set(requested).difference(fields_found)
             for name in list(requested):
                 # Filtered relations work only on the topmost level.
                 if cur_depth > 1:
@@ -1077,11 +1089,12 @@ class SQLCompiler:
             self.col_count if self.has_extra_select else None,
             chunk_size,
         )
-        if not chunked_fetch and not self.connection.features.can_use_chunked_reads:
+        if not chunked_fetch or not self.connection.features.can_use_chunked_reads:
             try:
                 # If we are using non-chunked reads, we return the same data
                 # structure as normally, but ensure it is all read into memory
-                # before going any further. Use chunked_fetch if requested.
+                # before going any further. Use chunked_fetch if requested,
+                # unless the database doesn't support it.
                 return list(result)
             finally:
                 # done with the cursor
@@ -1100,6 +1113,16 @@ class SQLCompiler:
 
         sql, params = self.as_sql()
         return 'EXISTS (%s)' % sql, params
+
+    def explain_query(self):
+        result = list(self.execute_sql())
+        # Some backends return 1 item tuples with strings, and others return
+        # tuples with integers and strings. Flatten them out into strings.
+        for row in result[0]:
+            if not isinstance(row, str):
+                yield ' '.join(str(c) for c in row)
+            else:
+                yield row
 
 
 class SQLInsertCompiler(SQLCompiler):

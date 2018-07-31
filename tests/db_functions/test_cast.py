@@ -39,6 +39,8 @@ class CastTests(TestCase):
 
     def test_cast_to_integer(self):
         for field_class in (
+            models.AutoField,
+            models.BigAutoField,
             models.IntegerField,
             models.BigIntegerField,
             models.SmallIntegerField,
@@ -74,3 +76,6 @@ class CastTests(TestCase):
         """
         list(Author.objects.annotate(cast_float=Cast(Avg('age'), models.FloatField())))
         self.assertIn('(AVG("db_functions_author"."age"))::double precision', connection.queries[-1]['sql'])
+
+    def test_cast_to_text_field(self):
+        self.assertEqual(Author.objects.values_list(Cast('age', models.TextField()), flat=True).get(), '1')

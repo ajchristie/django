@@ -6,12 +6,14 @@ from django.core.exceptions import EmptyResultSet
 from django.db.models.expressions import Func, Value
 from django.db.models.fields import DateTimeField, Field, IntegerField
 from django.db.models.query_utils import RegisterLookupMixin
+from django.utils.datastructures import OrderedSet
 from django.utils.functional import cached_property
 
 
 class Lookup:
     lookup_name = None
     prepare_rhs = True
+    can_use_none_as_rhs = False
 
     def __init__(self, lhs, rhs):
         self.lhs, self.rhs = lhs, rhs
@@ -325,7 +327,7 @@ class In(FieldGetDbPrepValueIterableMixin, BuiltinLookup):
 
         if self.rhs_is_direct_value():
             try:
-                rhs = set(self.rhs)
+                rhs = OrderedSet(self.rhs)
             except TypeError:  # Unhashable items in self.rhs
                 rhs = self.rhs
 
@@ -397,7 +399,7 @@ class PatternLookup(BuiltinLookup):
 
     def process_rhs(self, qn, connection):
         rhs, params = super().process_rhs(qn, connection)
-        if params and not self.bilateral_transforms:
+        if self.rhs_is_direct_value() and params and not self.bilateral_transforms:
             params[0] = self.param_pattern % connection.ops.prep_for_like_query(params[0])
         return rhs, params
 

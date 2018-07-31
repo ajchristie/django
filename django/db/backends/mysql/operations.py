@@ -1,3 +1,4 @@
+import decimal
 import uuid
 
 from django.conf import settings
@@ -17,7 +18,10 @@ class DatabaseOperations(BaseDatabaseOperations):
         'PositiveIntegerField': (0, 4294967295),
     }
     cast_data_types = {
+        'AutoField': 'signed integer',
+        'BigAutoField': 'signed integer',
         'CharField': 'char(%(max_length)s)',
+        'TextField': 'char',
         'IntegerField': 'signed integer',
         'BigIntegerField': 'signed integer',
         'SmallIntegerField': 'signed integer',
@@ -25,6 +29,7 @@ class DatabaseOperations(BaseDatabaseOperations):
         'PositiveSmallIntegerField': 'unsigned integer',
     }
     cast_char_field_without_max_length = 'char'
+    explain_prefix = 'EXPLAIN'
 
     def date_extract_sql(self, lookup_type, field_name):
         # http://dev.mysql.com/doc/mysql/en/date-and-time-functions.html
@@ -258,13 +263,48 @@ class DatabaseOperations(BaseDatabaseOperations):
     def binary_placeholder_sql(self, value):
         return '_binary %s' if value is not None and not hasattr(value, 'as_sql') else '%s'
 
+    def convert_durationfield_value(self, value, expression, connection):
+        # DurationFields can return a Decimal in MariaDB.
+        if isinstance(value, decimal.Decimal):
+            value = float(value)
+        return super().convert_durationfield_value(value, expression, connection)
+
     def subtract_temporals(self, internal_type, lhs, rhs):
         lhs_sql, lhs_params = lhs
         rhs_sql, rhs_params = rhs
         if internal_type == 'TimeField':
+            if self.connection.mysql_is_mariadb:
+                # MariaDB includes the microsecond component in TIME_TO_SEC as
+                # a decimal. MySQL returns an integer without microseconds.
+                return '((TIME_TO_SEC(%(lhs)s) - TIME_TO_SEC(%(rhs)s)) * 1000000)' % {
+                    'lhs': lhs_sql, 'rhs': rhs_sql
+                }, lhs_params + rhs_params
             return (
                 "((TIME_TO_SEC(%(lhs)s) * 1000000 + MICROSECOND(%(lhs)s)) -"
                 " (TIME_TO_SEC(%(rhs)s) * 1000000 + MICROSECOND(%(rhs)s)))"
             ) % {'lhs': lhs_sql, 'rhs': rhs_sql}, lhs_params * 2 + rhs_params * 2
         else:
             return "TIMESTAMPDIFF(MICROSECOND, %s, %s)" % (rhs_sql, lhs_sql), rhs_params + lhs_params
+
+    def explain_query_prefix(self, format=None, **options):
+        # Alias MySQL's TRADITIONAL to TEXT for consistency with other backends.
+        if format and format.upper() == 'TEXT':
+            format = 'TRADITIONAL'
+        prefix = super().explain_query_prefix(format, **options)
+        if format:
+            prefix += ' FORMAT=%s' % format
+        if self.connection.features.needs_explain_extended and format is None:
+            # EXTENDED and FORMAT are mutually exclusive options.
+            prefix += ' EXTENDED'
+        return prefix
+
+    def regex_lookup(self, lookup_type):
+        # REGEXP BINARY doesn't work correctly in MySQL 8+ and REGEXP_LIKE
+        # doesn't exist in MySQL 5.6 or in MariaDB.
+        if self.connection.mysql_version < (8, 0, 0) or self.connection.mysql_is_mariadb:
+            if lookup_type == 'regex':
+                return '%s REGEXP BINARY %s'
+            return '%s REGEXP %s'
+
+        match_option = 'c' if lookup_type == 'regex' else 'i'
+        return "REGEXP_LIKE(%%s, %%s, '%s')" % match_option

@@ -51,6 +51,12 @@ class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
         )
         self.assertContains(response, 'Views by namespace test')
         self.assertContains(response, 'Name: <code>test:func</code>.')
+        self.assertContains(
+            response,
+            '<h3><a href="/admindocs/views/admin_docs.views.XViewCallableObject/">'
+            '/xview/callable_object_without_xview/</a></h3>',
+            html=True,
+        )
 
     def test_view_index_with_method(self):
         """
@@ -201,6 +207,10 @@ class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
         displayed, but omitting 'self'.
         """
         self.assertContains(self.response, "<td>baz, rox, *some_args, **some_kwargs</td>")
+
+    def test_instance_of_property_methods_are_displayed(self):
+        """Model properties are displayed as fields."""
+        self.assertContains(self.response, '<td>a_property</td>')
 
     def test_method_data_types(self):
         company = Company.objects.create(name="Django")
